@@ -21,8 +21,8 @@
  const profileCovers=(version,kind)=>Boolean(version.content_profile?.coverage?.[kind]);
  const profileHasDatedSchedule=version=>(version.content_profile?.sections||[]).some(s=>['schedule','registration'].includes(s.kind)&&(s.items||[]).some(i=>/(?:20\d{2}[年./-]\d{1,2}|\d{1,2}月\d{1,2}日|\d{1,2}日)/.test(i.text||'')));
  function safeCduUrl(value){try{const url=new URL(value);return (url.protocol==='http:'||url.protocol==='https:')&&(url.hostname==='cdu.edu.cn'||url.hostname.endsWith('.cdu.edu.cn'))}catch(_){return false}}
- const profileNames={audience:'参与对象',conditions:'参与条件',quota:'名额与推荐',location:'地点',registration:'报名步骤',materials:'所需材料',schedule:'日程安排',fees:'费用与缴费',content:'活动内容',benefits:'奖励与保障',contact:'联系与咨询',duties:'职责要求',notes:'其他说明',other:'其他说明'};
- const kindOrder=['audience','conditions','quota','registration','materials','schedule','location','fees','benefits','contact','content','duties','notes','other'];
+ const profileNames={audience:'适合人群',conditions:'参与条件',eligibility:'参与条件',quota:'名额与推荐',location:'地点',registration:'报名方式',materials:'准备材料',schedule:'时间安排',fees:'费用',content:'活动内容',benefits:'奖励与权益',contact:'联系与咨询',organizers:'举办单位',level:'活动级别',duties:'职责要求',notes:'补充说明',other:'其他说明'};
+ const kindOrder=['audience','eligibility','conditions','quota','registration','materials','schedule','location','fees','benefits','organizers','level','contact','content','duties','notes','other'];
  const cleanListText=text=>String(text||'').replace(/^\s*(?:(?:[•·▪◦])\s*)?(?:(?:[（(]?\d{1,2}[）)]?[.、)）])\s*)+/,'');
  const displayText=text=>cleanListText(String(text||'').replace(/^\s*(?:[•·▪◦]\s*)?\d{1,2}[.、)）](?=[\u4e00-\u9fff《（])/,'').replace(/^\s*[•·▪◦]\s*/,''));
  /* 版面修复：OCR 把年份、时刻、汉字切断的地方接回去；不改写用词。 */
