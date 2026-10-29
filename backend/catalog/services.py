@@ -31,17 +31,57 @@ from .models import (Activity, ActivityGroup, CampusService, Fact, Guide, Notice
 
 
 PUBLIC_PHONE = re.compile(r'(?<![0-9A-Za-z@])1[3-9]\d{9}(?![0-9A-Za-z@])')
-PUBLIC_ID = re.compile(r'(?<![0-9A-Za-z])\d{17}[\dXx](?![0-9A-Za-z])')
+PUBLIC_ID_LABELED = re.compile(
+    r'((?:居民身份证(?:号码|号)?|身份证(?:号码|号)?|证件号码|证件号)\s*[:：]?\s*)(\d{17}[\dXx])', re.I)
+PUBLIC_ID_ANY = re.compile(r'(?<![0-9A-Za-z])\d{17}[\dXx](?![0-9A-Za-z])')
 PUBLIC_QQ = re.compile(r'(?:QQ群|群号|QQ)\s*[:：]?\s*\d{5,12}', re.I)
 PUBLIC_NAME = re.compile(r'((?:联系人|联系人姓名|负责人|队长|组长)\s*[:：]\s*)([一-鿿]{2,4})(?=$|[，,。；;、\s（(])')
+PUBLIC_EMAIL = re.compile(
+    r'(?<![\w.+-])([\w.+-]+)\s*@\s*([A-Z0-9-]+(?:\s*[.．,，、。]\s*[A-Z0-9-]+)+)', re.I)
+PUBLIC_EMAIL_ALLOWED_SUFFIXES = ('.edu.cn', '.gov.cn')
+PUBLIC_INTERNAL_LEVEL = re.compile(
+    r'\b(?:competition_level|stage_level)\s*[:=：]\s*(?:school|college|provincial|national|international|none|unknown)\b',
+    re.I,
+)
+PUBLIC_INTERNAL_PROCESS = re.compile(
+    r'[^。；;\n]*(?:冻结包|未随包提供|镜像附件|编号核验|不作为单日节点|'
+    r'内部核验|候选修订|未完成核查|审计复核|'
+    r'A0[1-9][^。；;\n]{0,16}未读取|附件[^。；;\n]{0,10}未读取)[^。；;\n]*[。；;]?'
+)
+
+
+def _is_valid_cn_id(value: str) -> bool:
+    """Only mask checksum-valid mainland ID numbers; keep valid event codes."""
+    if not re.fullmatch(r'\d{17}[\dXx]', value):
+        return False
+    from datetime import date
+    try:
+        date(int(value[6:10]), int(value[10:12]), int(value[12:14]))
+    except ValueError:
+        return False
+    weights = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
+    checks = '10X98765432'
+    expected = checks[sum(int(char) * weight for char, weight in zip(value[:17], weights)) % 11]
+    return value[-1].upper() == expected
 
 
 def redact_public(value: str) -> str:
     text = str(value or '')
+    text = PUBLIC_INTERNAL_PROCESS.sub('', text)
+    text = PUBLIC_INTERNAL_LEVEL.sub('', text)
+    text = re.sub(r'\s*[；;，,]\s*[；;，,]+\s*', '；', text)
+    text = re.sub(r'^[\s；;,。]+|[\s；;,。]+$', '', text)
     text = PUBLIC_PHONE.sub('〔手机号已隐去〕', text)
-    text = PUBLIC_ID.sub('〔身份证号已隐去〕', text)
+    text = PUBLIC_ID_LABELED.sub(lambda m: m.group(1) + '〔身份证号已隐去〕', text)
+    text = PUBLIC_ID_ANY.sub(lambda m: '〔身份证号已隐去〕' if _is_valid_cn_id(m.group()) else m.group(), text)
     text = PUBLIC_QQ.sub(lambda m: re.sub(r'\d{5,12}', '〔群号已隐去〕', m.group()), text)
     text = PUBLIC_NAME.sub(lambda m: m.group(1) + '〔姓名已隐去〕', text)
+    def redact_email(match):
+        domain = re.sub(r'\s*[.．,，、。]\s*', '.', match.group(2)).lower().rstrip('.')
+        if domain.endswith(PUBLIC_EMAIL_ALLOWED_SUFFIXES):
+            return match.group(0)
+        return '〔个人邮箱已隐去〕'
+    text = PUBLIC_EMAIL.sub(redact_email, text)
     return text
 
 CN_TZ = timezone.get_current_timezone()
@@ -470,6 +510,11 @@ def preview_facts(notice):
 
 def _redact_profile(payload: dict) -> dict:
     copied = json.loads(json.dumps(payload or {}, ensure_ascii=False))
+    # Semantic audit internals and raw candidate evidence are not reader-facing.
+    copied.pop('semantic_fields', None)
+    copied.pop('review', None)
+    for section in copied.get('sections', []):
+        section.pop('evidence', None)
     for section in copied.get('sections', []):
         for item in section.get('items', []):
             if isinstance(item.get('text'), str):
