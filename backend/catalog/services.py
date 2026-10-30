@@ -30,59 +30,15 @@ from .models import (Activity, ActivityGroup, CampusService, Fact, Guide, Notice
 
 
 
-PUBLIC_PHONE = re.compile(r'(?<![0-9A-Za-z@])1[3-9]\d{9}(?![0-9A-Za-z@])')
-PUBLIC_ID_LABELED = re.compile(
-    r'((?:居民身份证(?:号码|号)?|身份证(?:号码|号)?|证件号码|证件号)\s*[:：]?\s*)(\d{17}[\dXx])', re.I)
-PUBLIC_ID_ANY = re.compile(r'(?<![0-9A-Za-z])\d{17}[\dXx](?![0-9A-Za-z])')
-PUBLIC_QQ = re.compile(r'(?:QQ群|群号|QQ)\s*[:：]?\s*\d{5,12}', re.I)
-PUBLIC_NAME = re.compile(r'((?:联系人|联系人姓名|负责人|队长|组长)\s*[:：]\s*)([一-鿿]{2,4})(?=$|[，,。；;、\s（(])')
-PUBLIC_EMAIL = re.compile(
-    r'(?<![\w.+-])([\w.+-]+)\s*@\s*([A-Z0-9-]+(?:\s*[.．,，、。]\s*[A-Z0-9-]+)+)', re.I)
-PUBLIC_EMAIL_ALLOWED_SUFFIXES = ('.edu.cn', '.gov.cn')
-PUBLIC_INTERNAL_LEVEL = re.compile(
-    r'\b(?:competition_level|stage_level)\s*[:=：]\s*(?:school|college|provincial|national|international|none|unknown)\b',
-    re.I,
+# Privacy rules live in a Django-free module so exports, scanners and tests
+# share one implementation.  Keep the names imported here: services, API and
+# static export call them directly.
+from .privacy_rules import (  # noqa: F401
+    PUBLIC_EMAIL, PUBLIC_EMAIL_ALLOWED_SUFFIXES, PUBLIC_EMAIL_PLACEHOLDER,
+    PUBLIC_ID_ANY, PUBLIC_ID_LABELED, PUBLIC_INTERNAL_LEVEL, PUBLIC_NAME,
+    PUBLIC_PHONE, PUBLIC_QQ, _is_valid_cn_id, _redact_tree, redact_profile,
+    redact_public,
 )
-PUBLIC_INTERNAL_PROCESS = re.compile(
-    r'[^。；;\n]*(?:冻结包|未随包提供|镜像附件|编号核验|不作为单日节点|'
-    r'内部核验|候选修订|未完成核查|审计复核|'
-    r'A0[1-9][^。；;\n]{0,16}未读取|附件[^。；;\n]{0,10}未读取)[^。；;\n]*[。；;]?'
-)
-
-
-def _is_valid_cn_id(value: str) -> bool:
-    """Only mask checksum-valid mainland ID numbers; keep valid event codes."""
-    if not re.fullmatch(r'\d{17}[\dXx]', value):
-        return False
-    from datetime import date
-    try:
-        date(int(value[6:10]), int(value[10:12]), int(value[12:14]))
-    except ValueError:
-        return False
-    weights = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
-    checks = '10X98765432'
-    expected = checks[sum(int(char) * weight for char, weight in zip(value[:17], weights)) % 11]
-    return value[-1].upper() == expected
-
-
-def redact_public(value: str) -> str:
-    text = str(value or '')
-    text = PUBLIC_INTERNAL_PROCESS.sub('', text)
-    text = PUBLIC_INTERNAL_LEVEL.sub('', text)
-    text = re.sub(r'\s*[；;，,]\s*[；;，,]+\s*', '；', text)
-    text = re.sub(r'^[\s；;,。]+|[\s；;,。]+$', '', text)
-    text = PUBLIC_PHONE.sub('〔手机号已隐去〕', text)
-    text = PUBLIC_ID_LABELED.sub(lambda m: m.group(1) + '〔身份证号已隐去〕', text)
-    text = PUBLIC_ID_ANY.sub(lambda m: '〔身份证号已隐去〕' if _is_valid_cn_id(m.group()) else m.group(), text)
-    text = PUBLIC_QQ.sub(lambda m: re.sub(r'\d{5,12}', '〔群号已隐去〕', m.group()), text)
-    text = PUBLIC_NAME.sub(lambda m: m.group(1) + '〔姓名已隐去〕', text)
-    def redact_email(match):
-        domain = re.sub(r'\s*[.．,，、。]\s*', '.', match.group(2)).lower().rstrip('.')
-        if domain.endswith(PUBLIC_EMAIL_ALLOWED_SUFFIXES):
-            return match.group(0)
-        return '〔个人邮箱已隐去〕'
-    text = PUBLIC_EMAIL.sub(redact_email, text)
-    return text
 
 CN_TZ = timezone.get_current_timezone()
 
@@ -306,7 +262,7 @@ def notice_search_text(notice: Notice, facts=None, profile=None) -> str:
     curated_sections=participation.sections(notice)
     if curated_sections is not None:
         parts.extend(item['text'] for section in curated_sections for item in section['items'])
-        return ' '.join(part for part in parts if part).lower()
+        return redact_public(' '.join(part for part in parts if part).lower())
     for fact in (facts if facts is not None else notice.facts.all()):
         parts.extend([fact.label or '', fact.value or '', fact.quote or ''])
     payload = (profile.payload if profile is not None else
@@ -314,13 +270,13 @@ def notice_search_text(notice: Notice, facts=None, profile=None) -> str:
     for section in (payload or {}).get('sections') or []:
         parts.append(section.get('title') or '')
         parts.extend(item.get('text') or '' for item in section.get('items') or [])
-    return ' '.join(part for part in parts if part).lower()
+    return redact_public(' '.join(part for part in parts if part).lower())
 
 
 def activity_search_text(activity: Activity) -> str:
     parts = [activity.title or '', activity.summary or '', activity.editorial_note or '',
              ' '.join(activity.tags or []), activity.category_label]
-    return ' '.join(part for part in parts if part).lower()
+    return redact_public(' '.join(part for part in parts if part).lower())
 
 # ---------------------------------------------------------------- 卡片与通知（唯一口径）
 
@@ -495,7 +451,7 @@ def _fact_payload(fact: Fact) -> dict:
     data = {key: getattr(fact, key) for key in FACT_FIELDS}
     data['value'] = redact_public(data['value'])
     data['quote'] = redact_public(data['quote'])
-    data['label'] = fact.label or (fact.extras or {}).get('label', '')
+    data['label'] = redact_public(fact.label or (fact.extras or {}).get('label', ''))
     return data
 
 
@@ -503,23 +459,13 @@ def preview_facts(notice):
     sections=participation.sections(notice)
     if sections is None:
         return [_fact_payload(f) for f in list(notice.facts.all())[:12]]
-    return [{'kind':section['kind'],'label':section['title'],'value':item['text'],
+    return [{'kind':section['kind'],'label':redact_public(section['title']),'value':redact_public(item['text']),
              'quote':'','locator':'','source_url':notice.source.url if notice.source_id else '',
              'basis':'editorial'} for section in sections for item in section['items']][:12]
 
 
 def _redact_profile(payload: dict) -> dict:
-    copied = json.loads(json.dumps(payload or {}, ensure_ascii=False))
-    # Semantic audit internals and raw candidate evidence are not reader-facing.
-    copied.pop('semantic_fields', None)
-    copied.pop('review', None)
-    for section in copied.get('sections', []):
-        section.pop('evidence', None)
-    for section in copied.get('sections', []):
-        for item in section.get('items', []):
-            if isinstance(item.get('text'), str):
-                item['text'] = redact_public(item['text'])
-    return copied
+    return redact_profile(payload)
 
 
 def serialize_notice(notice: Notice, detail: bool = False) -> dict:
@@ -541,20 +487,20 @@ def serialize_notice(notice: Notice, detail: bool = False) -> dict:
         'stage_end': notice.stage_end.isoformat() if notice.stage_end else None,
         'colleges': [t.code for t in notice.taxonomies.all() if t.kind == 'college'],
         'levels': [t.code for t in notice.taxonomies.all() if t.kind == 'level'],
-        'college_role': extras.get('college_role', ''),
-        'level_basis': extras.get('level_basis', ''),
+        'college_role': redact_public(extras.get('college_role', '')),
+        'level_basis': redact_public(extras.get('level_basis', '')),
         'audience': redact_public(notice.audience or ''),
-        'audience_scope': extras.get('audience_scope') or {},
+        'audience_scope': _redact_tree(extras.get('audience_scope') or {}),
         'source_url': notice.source.url if notice.source_id else '',
         'conflict': bool(notice.conflict),
-        'edition_label': extras.get('edition_label') or '',
-        'original_title': extras.get('original_title') or '',
-        'registration_windows': [] if curated_sections is not None else extras.get('registration_windows') or [],
+        'edition_label': redact_public(extras.get('edition_label') or ''),
+        'original_title': redact_public(extras.get('original_title') or ''),
+        'registration_windows': [] if curated_sections is not None else _redact_tree(extras.get('registration_windows') or []),
         'fact_count': len(notice.facts.all()) if detail else None,
     }
     if curated_sections is not None:
         data['editorial_curated']=True
-        data['content_profile']={'sections':curated_sections}
+        data['content_profile']={'sections':_redact_tree(curated_sections)}
         data['participation_facts']=preview_facts(notice)
         data['fact_count']=sum(len(section['items']) for section in curated_sections)
     elif detail:
@@ -886,7 +832,7 @@ def decorate(row: CardRow, filters: Filters) -> dict:
     version['participation_facts'] = preview_facts(notice)
     entry['phase'] = phase(notice)
     entry['registration_open'] = registration_open(notice)
-    entry['audience_line'] = notice.audience or ''
+    entry['audience_line'] = redact_public(notice.audience or '')
     entry['published'] = version.get('published')
     entry['deadline'] = version.get('deadline')
     entry['deadline_kind'] = version.get('deadline_kind')
